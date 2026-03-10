@@ -1,7 +1,8 @@
-const STORAGE_KEY = 'loan_ledger_records_v2';
-const CLOUD_KEY = 'loan_ledger_cloud_config_v1';
+const STORAGE_KEY = 'loan_ledger_records_v3';
+const CLOUD_KEY = 'loan_ledger_supabase_auth_config_v1';
 
 const monthInput = document.getElementById('month');
+const summaryMonthInput = document.getElementById('summaryMonth');
 const typeInput = document.getElementById('type');
 const amountInput = document.getElementById('amount');
 const noteInput = document.getElementById('note');
@@ -19,172 +20,187 @@ const TYPE_NAME = {
 };
 
 monthInput.value = new Date().toISOString().slice(0, 7);
+summaryMonthInput.value = monthInput.value;
 
-function cloudConfig() {
-  try {
-    return JSON.parse(localStorage.getItem(CLOUD_KEY) || '{}');
-  } catch {
-    return {};
-  }
-}
-
-function saveCloudConfig(cfg) {
-  localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg));
-}
-
-function isCloudEnabled() {
-  const c = cloudConfig();
-  return Boolean(c.url && c.anonKey && c.profileId);
-}
-
-function getCloudHeaders() {
-  const c = cloudConfig();
-  return {
-    apikey: c.anonKey,
-    Authorization: `Bearer ${c.anonKey}`,
-    'Content-Type': 'application/json',
-    Prefer: 'return=representation'
-  };
-}
+let supabaseClient = null;
+let currentUser = null;
 
 function loadRecordsLocal() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  } catch {
-    return [];
-  }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+  catch { return []; }
 }
 
 function saveRecordsLocal(records) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
 
+function loadCloudConfig() {
+  try { return JSON.parse(localStorage.getItem(CLOUD_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveCloudConfig(cfg) {
+  localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg));
+}
+
 function formatMoney(v) {
   return Number(v || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-async function fetchRecordsCloud() {
-  const c = cloudConfig();
-  const url = `${c.url}/rest/v1/ledger_records?profile_id=eq.${encodeURIComponent(c.profileId)}&select=*&order=created_at.desc`;
-  const resp = await fetch(url, { headers: getCloudHeaders() });
-  if (!resp.ok) throw new Error(`云端读取失败: ${resp.status}`);
-  const rows = await resp.json();
-  return rows.map((r) => ({
+function toViewRecord(r) {
+  return {
     id: r.id,
     month: r.month,
     type: r.type,
     amount: Number(r.amount),
     note: r.note || '',
-    createdAt: new Date(r.created_at).getTime()
-  }));
-}
-
-async function addRecordCloud(record) {
-  const c = cloudConfig();
-  const payload = {
-    id: record.id,
-    profile_id: c.profileId,
-    month: record.month,
-    type: record.type,
-    amount: record.amount,
-    note: record.note || ''
+    createdAt: new Date(r.created_at || Date.now()).getTime()
   };
-  const resp = await fetch(`${c.url}/rest/v1/ledger_records`, {
-    method: 'POST',
-    headers: getCloudHeaders(),
-    body: JSON.stringify(payload)
-  });
-  if (!resp.ok) throw new Error(`云端新增失败: ${resp.status}`);
 }
 
-async function deleteRecordCloud(id) {
-  const c = cloudConfig();
-  const url = `${c.url}/rest/v1/ledger_records?id=eq.${encodeURIComponent(id)}&profile_id=eq.${encodeURIComponent(c.profileId)}`;
-  const resp = await fetch(url, { method: 'DELETE', headers: getCloudHeaders() });
-  if (!resp.ok) throw new Error(`云端删除失败: ${resp.status}`);
-}
-
-async function clearRecordsCloud() {
-  const c = cloudConfig();
-  const url = `${c.url}/rest/v1/ledger_records?profile_id=eq.${encodeURIComponent(c.profileId)}`;
-  const resp = await fetch(url, { method: 'DELETE', headers: getCloudHeaders() });
-  if (!resp.ok) throw new Error(`云端清空失败: ${resp.status}`);
-}
-
-function setupCloudControls() {
+function setupAuthPanel() {
   const panel = document.createElement('section');
   panel.className = 'card';
   panel.innerHTML = `
-    <h2>☁️ 云同步设置（Supabase）</h2>
+    <h2>🔐 云同步登录（Supabase Auth）</h2>
     <div class="grid">
       <label>Supabase URL
-        <input type="text" id="cloudUrl" placeholder="https://xxxx.supabase.co" />
+        <input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co" />
       </label>
-      <label>Anon Key
-        <input type="text" id="cloudKey" placeholder="eyJhbGciOi..." />
+      <label>Supabase Anon Key
+        <input type="text" id="sbKey" placeholder="eyJhbGciOi..." />
       </label>
-      <label>个人标识（同一个人所有设备保持一致）
-        <input type="text" id="cloudProfile" placeholder="例如 li-home" />
+      <label>登录邮箱
+        <input type="email" id="loginEmail" placeholder="you@example.com" />
       </label>
     </div>
     <div style="margin-top:10px;">
-      <button id="saveCloudBtn">保存并启用云同步</button>
-      <button id="disableCloudBtn" class="danger">停用云同步</button>
-      <button id="syncNowBtn">立即同步</button>
-      <span id="cloudStatus" style="margin-left:10px;color:#666;"></span>
+      <button id="saveCfgBtn">保存配置</button>
+      <button id="sendMagicBtn">发送登录链接</button>
+      <button id="syncBtn">立即同步</button>
+      <button id="logoutBtn" class="danger">退出登录</button>
+      <div id="authStatus" style="margin-top:8px;color:#666;">未配置</div>
     </div>
   `;
 
   document.querySelector('.container').insertBefore(panel, document.querySelectorAll('.card')[1]);
 
-  const c = cloudConfig();
-  document.getElementById('cloudUrl').value = c.url || '';
-  document.getElementById('cloudKey').value = c.anonKey || '';
-  document.getElementById('cloudProfile').value = c.profileId || '';
+  const cfg = loadCloudConfig();
+  document.getElementById('sbUrl').value = cfg.url || '';
+  document.getElementById('sbKey').value = cfg.anonKey || '';
+  document.getElementById('loginEmail').value = cfg.email || 'fantasy4399@gmail.com';
 
-  const statusEl = document.getElementById('cloudStatus');
-  statusEl.textContent = isCloudEnabled() ? '已启用云同步' : '当前仅本地存储';
+  document.getElementById('saveCfgBtn').addEventListener('click', async () => {
+    const url = document.getElementById('sbUrl').value.trim().replace(/\/$/, '');
+    const anonKey = document.getElementById('sbKey').value.trim();
+    const email = document.getElementById('loginEmail').value.trim();
+    if (!url || !anonKey || !email) return alert('请填完整 URL / Anon Key / 邮箱');
 
-  document.getElementById('saveCloudBtn').addEventListener('click', async () => {
-    const url = document.getElementById('cloudUrl').value.trim().replace(/\/$/, '');
-    const anonKey = document.getElementById('cloudKey').value.trim();
-    const profileId = document.getElementById('cloudProfile').value.trim();
-
-    if (!url || !anonKey || !profileId) return alert('请填完整 Supabase URL / Anon Key / 个人标识');
-    saveCloudConfig({ url, anonKey, profileId });
-
+    saveCloudConfig({ url, anonKey, email });
     try {
-      await syncFromCloud();
-      statusEl.textContent = '已启用云同步';
-      alert('云同步已启用');
+      await initSupabase();
+      setAuthStatus(currentUser ? `已登录：${currentUser.email}` : '配置已保存，待登录');
+      alert('配置已保存');
     } catch (e) {
-      statusEl.textContent = '云同步连接失败';
-      alert(`启用失败：${e.message}`);
+      setAuthStatus('配置无效');
+      alert(`配置失败：${e.message}`);
     }
   });
 
-  document.getElementById('disableCloudBtn').addEventListener('click', () => {
-    localStorage.removeItem(CLOUD_KEY);
-    statusEl.textContent = '当前仅本地存储';
-    alert('已停用云同步');
+  document.getElementById('sendMagicBtn').addEventListener('click', async () => {
+    if (!supabaseClient) return alert('请先保存 Supabase 配置');
+    const email = document.getElementById('loginEmail').value.trim();
+    if (!email) return alert('请填写邮箱');
+
+    const origin = window.location.origin + window.location.pathname;
+    const { error } = await supabaseClient.auth.signInWithOtp({ email, options: { emailRedirectTo: origin } });
+    if (error) return alert(`发送失败：${error.message}`);
+    setAuthStatus(`登录链接已发送到 ${email}`);
+    alert('登录链接已发送，请去邮箱点击');
   });
 
-  document.getElementById('syncNowBtn').addEventListener('click', async () => {
+  document.getElementById('syncBtn').addEventListener('click', async () => {
     try {
       await syncFromCloud();
-      statusEl.textContent = '同步成功';
-      alert('同步完成');
+      alert('同步成功');
     } catch (e) {
-      statusEl.textContent = '同步失败';
       alert(`同步失败：${e.message}`);
     }
   });
+
+  document.getElementById('logoutBtn').addEventListener('click', async () => {
+    if (!supabaseClient) return;
+    await supabaseClient.auth.signOut();
+    currentUser = null;
+    setAuthStatus('已退出登录');
+  });
+}
+
+function setAuthStatus(text) {
+  const el = document.getElementById('authStatus');
+  if (el) el.textContent = text;
+}
+
+async function initSupabase() {
+  const cfg = loadCloudConfig();
+  if (!cfg.url || !cfg.anonKey) return null;
+  if (!window.supabase?.createClient) throw new Error('Supabase SDK 未加载');
+
+  supabaseClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+
+  const { data } = await supabaseClient.auth.getSession();
+  currentUser = data?.session?.user || null;
+  setAuthStatus(currentUser ? `已登录：${currentUser.email}` : '配置已保存，待登录');
+
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    currentUser = session?.user || null;
+    setAuthStatus(currentUser ? `已登录：${currentUser.email}` : '未登录');
+    if (currentUser) syncFromCloud().catch(() => {});
+  });
+
+  return supabaseClient;
+}
+
+async function fetchCloudRecords() {
+  if (!supabaseClient || !currentUser) throw new Error('请先登录');
+  const { data, error } = await supabaseClient
+    .from('ledger_records')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return (data || []).map(toViewRecord);
+}
+
+async function addCloudRecord(record) {
+  if (!supabaseClient || !currentUser) throw new Error('请先登录');
+  const { error } = await supabaseClient.from('ledger_records').insert({
+    id: record.id,
+    user_id: currentUser.id,
+    month: record.month,
+    type: record.type,
+    amount: record.amount,
+    note: record.note || ''
+  });
+  if (error) throw error;
+}
+
+async function deleteCloudRecord(id) {
+  if (!supabaseClient || !currentUser) throw new Error('请先登录');
+  const { error } = await supabaseClient.from('ledger_records').delete().eq('id', id);
+  if (error) throw error;
+}
+
+async function clearCloudRecords() {
+  if (!supabaseClient || !currentUser) throw new Error('请先登录');
+  const { error } = await supabaseClient.from('ledger_records').delete().neq('id', '__none__');
+  if (error) throw error;
 }
 
 async function syncFromCloud() {
-  if (!isCloudEnabled()) return;
-  const records = await fetchRecordsCloud();
-  saveRecordsLocal(records);
+  if (!supabaseClient || !currentUser) throw new Error('请先登录');
+  const cloudRecords = await fetchCloudRecords();
+  saveRecordsLocal(cloudRecords);
   render();
 }
 
@@ -209,10 +225,10 @@ function render() {
     }
   }
 
-  const month = monthInput.value;
+  const month = summaryMonthInput.value || monthInput.value;
   const current = records.filter(r => r.month === month);
-
   const sum = (type) => current.filter(r => r.type === type).reduce((acc, r) => acc + Number(r.amount), 0);
+
   const income = sum('income');
   const repayment = sum('repayment');
   const borrowing = sum('borrowing');
@@ -237,8 +253,8 @@ addBtn.addEventListener('click', async () => {
   if (!month) return alert('请选择月份');
   if (!amount || amount <= 0) return alert('请输入正确金额');
 
-  const newRecord = {
-    id: (crypto?.randomUUID?.() || (Date.now() + Math.random().toString(16).slice(2))),
+  const rec = {
+    id: crypto?.randomUUID?.() || (Date.now() + Math.random().toString(16).slice(2)),
     month,
     type,
     amount,
@@ -247,17 +263,17 @@ addBtn.addEventListener('click', async () => {
   };
 
   const records = loadRecordsLocal();
-  records.push(newRecord);
+  records.push(rec);
   saveRecordsLocal(records);
   render();
 
   try {
-    if (isCloudEnabled()) {
-      await addRecordCloud(newRecord);
+    if (supabaseClient && currentUser) {
+      await addCloudRecord(rec);
       await syncFromCloud();
     }
   } catch (e) {
-    alert(`已保存本地，但云端写入失败：${e.message}`);
+    alert(`本地已保存，云端失败：${e.message}`);
   }
 
   amountInput.value = '';
@@ -269,25 +285,37 @@ recordsBody.addEventListener('click', async (e) => {
   if (!btn) return;
 
   const id = btn.dataset.id;
-  const records = loadRecordsLocal().filter(r => r.id !== id);
-  saveRecordsLocal(records);
+  saveRecordsLocal(loadRecordsLocal().filter(r => r.id !== id));
   render();
 
   try {
-    if (isCloudEnabled()) {
-      await deleteRecordCloud(id);
+    if (supabaseClient && currentUser) {
+      await deleteCloudRecord(id);
       await syncFromCloud();
     }
-  } catch (err) {
-    alert(`本地已删除，但云端删除失败：${err.message}`);
+  } catch (e) {
+    alert(`本地已删，云端删除失败：${e.message}`);
   }
 });
 
-monthInput.addEventListener('change', render);
+clearBtn.addEventListener('click', async () => {
+  if (!confirm('确定清空全部记录吗？此操作不可恢复。')) return;
+  saveRecordsLocal([]);
+  render();
+
+  try {
+    if (supabaseClient && currentUser) {
+      await clearCloudRecords();
+      await syncFromCloud();
+    }
+  } catch (e) {
+    alert(`本地已清空，云端失败：${e.message}`);
+  }
+});
 
 exportBtn.addEventListener('click', () => {
   const records = loadRecordsLocal();
-  if (!records.length) return alert('暂无可导出的数据');
+  if (!records.length) return alert('暂无可导出数据');
 
   const header = ['月份', '类型', '金额', '内容说明', '创建时间'];
   const rows = records.map(r => [
@@ -298,10 +326,7 @@ exportBtn.addEventListener('click', () => {
     new Date(r.createdAt).toLocaleString('zh-CN')
   ]);
 
-  const csv = [header, ...rows]
-    .map(row => row.map(v => `"${String(v ?? '')}"`).join(','))
-    .join('\n');
-
+  const csv = [header, ...rows].map(row => row.map(v => `"${String(v ?? '')}"`).join(',')).join('\n');
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -311,18 +336,14 @@ exportBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-clearBtn.addEventListener('click', async () => {
-  if (!confirm('确定清空全部记录吗？此操作不可恢复。')) return;
-  saveRecordsLocal([]);
+monthInput.addEventListener('change', () => {
+  if (!summaryMonthInput.value) summaryMonthInput.value = monthInput.value;
   render();
-
-  try {
-    if (isCloudEnabled()) await clearRecordsCloud();
-  } catch (e) {
-    alert(`本地已清空，但云端清空失败：${e.message}`);
-  }
 });
+summaryMonthInput.addEventListener('change', render);
 
-setupCloudControls();
+setupAuthPanel();
 render();
-if (isCloudEnabled()) syncFromCloud().catch(() => {});
+initSupabase().then(() => {
+  if (currentUser) syncFromCloud().catch(() => {});
+}).catch(() => setAuthStatus('请先配置 Supabase'));
