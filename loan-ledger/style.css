@@ -39,6 +39,12 @@ button {
 button.danger { background: #d94b4b; }
 button + button { margin-left: 8px; }
 .form-card button { margin-top: 10px; }
+.summary-header {
+  margin-bottom: 12px;
+}
+.summary-header input {
+  width: 180px;
+}
 .summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));

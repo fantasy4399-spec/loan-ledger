@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'loan_ledger_records_v1';
 
 const monthInput = document.getElementById('month');
+const summaryMonthInput = document.getElementById('summaryMonth');
 const typeInput = document.getElementById('type');
 const amountInput = document.getElementById('amount');
 const noteInput = document.getElementById('note');
@@ -17,7 +18,10 @@ const TYPE_NAME = {
   expense: '支出'
 };
 
-monthInput.value = new Date().toISOString().slice(0, 7);
+// 初始化月份默认值
+const now = new Date();
+monthInput.value = now.toISOString().slice(0, 7);
+summaryMonthInput.value = now.toISOString().slice(0, 7);
 
 function loadRecords() {
   try {
@@ -57,8 +61,8 @@ function render() {
     }
   }
 
-  // 汇总（按当前月份）
-  const month = monthInput.value;
+  // 汇总（按选择的月份）
+  const month = summaryMonthInput.value;
   const current = records.filter(r => r.month === month);
 
   const sum = (type) => current.filter(r => r.type === type).reduce((acc, r) => acc + Number(r.amount), 0);
@@ -113,6 +117,7 @@ recordsBody.addEventListener('click', (e) => {
 });
 
 monthInput.addEventListener('change', render);
+summaryMonthInput.addEventListener('change', render);
 
 exportBtn.addEventListener('click', () => {
   const records = loadRecords();
