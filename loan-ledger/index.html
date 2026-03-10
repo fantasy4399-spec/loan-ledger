@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>还贷记账助手</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>💰 还贷记账助手</h1>
+
+    <section class="card form-card">
+      <h2>新增记录</h2>
+      <div class="grid">
+        <label>
+          月份
+          <input type="month" id="month" />
+        </label>
+
+        <label>
+          类型
+          <select id="type">
+            <option value="income">收入</option>
+            <option value="repayment">还款</option>
+            <option value="borrowing">借款</option>
+            <option value="expense">支出</option>
+          </select>
+        </label>
+
+        <label>
+          金额
+          <input type="number" id="amount" min="0" step="0.01" placeholder="例如 5000" />
+        </label>
+
+        <label>
+          内容说明
+          <input type="text" id="note" placeholder="例如 房贷/信用卡/日常开销" />
+        </label>
+      </div>
+
+      <button id="addBtn">添加记录</button>
+    </section>
+
+    <section class="card">
+      <h2>月度汇总</h2>
+      <div class="summary" id="summary"></div>
+    </section>
+
+    <section class="card">
+      <div class="toolbar">
+        <h2>记录列表</h2>
+        <div>
+          <button id="exportBtn">导出 CSV</button>
+          <button id="clearBtn" class="danger">清空全部</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>月份</th>
+            <th>类型</th>
+            <th>金额</th>
+            <th>内容说明</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="recordsBody"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
