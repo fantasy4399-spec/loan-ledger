@@ -2,9 +2,9 @@
   {
     "income": 6500.0,
     "repayment": 29704.87,
-    "borrowing": 0.0,
+    "borrowing": 29704.87,
     "expense": 0.0,
     "month": "2026-03",
-    "net": -23204.87
+    "net": 6499.999999999996
   }
 ]
